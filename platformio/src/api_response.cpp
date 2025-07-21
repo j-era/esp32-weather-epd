@@ -87,7 +87,8 @@ DeserializationError deserializeOneCall(WiFiClient &json,
   r.current.weather.id = current_weather["id"].as<int>();
   r.current.weather.main = current_weather["main"].as<const char *>();
   r.current.weather.description = current_weather["description"].as<const char *>();
-  r.current.weather.icon = current_weather["icon"].as<const char *>();
+  // OpenWeatherMap indicates sun is up with d otherwise n for night
+  r.current.is_day = current_weather["icon"].as<String>().endsWith("d");
 
   // minutely forecast is currently unused
   // i = 0;
@@ -118,14 +119,15 @@ DeserializationError deserializeOneCall(WiFiClient &json,
     r.hourly[i].wind_speed = hourly["wind_speed"].as<float>();
     r.hourly[i].wind_gust = hourly["wind_gust"].as<float>();
     r.hourly[i].wind_deg = hourly["wind_deg"].as<int>();
-    r.hourly[i].pop = hourly["pop"].as<float>();
+    r.hourly[i].pop = hourly["pop"].as<float>() * 100;
     r.hourly[i].rain_1h = hourly["rain"]["1h"].as<float>();
     r.hourly[i].snow_1h = hourly["snow"]["1h"].as<float>();
     JsonObject hourly_weather = hourly["weather"][0];
     r.hourly[i].weather.id = hourly_weather["id"].as<int>();
     r.hourly[i].weather.main = hourly_weather["main"].as<const char *>();
     r.hourly[i].weather.description = hourly_weather["description"].as<const char *>();
-    r.hourly[i].weather.icon = hourly_weather["icon"].as<const char *>();
+    // OpenWeatherMap indicates sun is up with d otherwise n for night
+    r.hourly[i].is_day = hourly_weather["icon"].as<String>().endsWith("d");
 
     if (i == OWM_NUM_HOURLY - 1)
     {
@@ -164,14 +166,13 @@ DeserializationError deserializeOneCall(WiFiClient &json,
     r.daily[i].wind_speed = daily["wind_speed"].as<float>();
     r.daily[i].wind_gust = daily["wind_gust"].as<float>();
     r.daily[i].wind_deg = daily["wind_deg"].as<int>();
-    r.daily[i].pop = daily["pop"].as<float>();
+    r.daily[i].pop = daily["pop"].as<float>() * 100;
     r.daily[i].rain = daily["rain"].as<float>();
     r.daily[i].snow = daily["snow"].as<float>();
     JsonObject daily_weather = daily["weather"][0];
     r.daily[i].weather.id = daily_weather["id"].as<int>();
     r.daily[i].weather.main = daily_weather["main"].as<const char *>();
     r.daily[i].weather.description = daily_weather["description"].as<const char *>();
-    r.daily[i].weather.icon = daily_weather["icon"].as<const char *>();
 
     if (i == OWM_NUM_DAILY - 1)
     {
@@ -256,30 +257,9 @@ DeserializationError deserializeAirQuality(WiFiClient &json,
 DeserializationError deserializeOpenMeteoCall(WiFiClient &json,
                                               owm_resp_onecall_t &r)
 {
-  JsonDocument filter;
-  filter["current"] = true;
-  filter["minutely"] = false;
-  filter["hourly"] = true;
-  filter["daily"] = true;
-#if !DISPLAY_ALERTS
-  filter["alerts"] = false;
-#else
-  // description can be very long so they are filtered out to save on memory
-  // along with sender_name
-  for (int i = 0; i < OWM_NUM_ALERTS; ++i)
-  {
-    filter["alerts"][i]["sender_name"] = false;
-    filter["alerts"][i]["event"] = true;
-    filter["alerts"][i]["start"] = true;
-    filter["alerts"][i]["end"] = true;
-    filter["alerts"][i]["description"] = false;
-    filter["alerts"][i]["tags"] = true;
-  }
-#endif
-
   JsonDocument doc;
-
-  DeserializationError error = deserializeJson(doc, json, DeserializationOption::Filter(filter));
+  
+  DeserializationError error = deserializeJson(doc, json);
 
 #if DEBUG_LEVEL >= 1
   Serial.println("[debug] doc.overflowed() : " + String(doc.overflowed()));
@@ -292,11 +272,6 @@ DeserializationError deserializeOpenMeteoCall(WiFiClient &json,
     return error;
   }
 
-  r.lat = doc["latitude"].as<float>();
-  r.lon = doc["longitude"].as<float>();
-  r.timezone = doc["timezone"].as<const char *>();
-  r.timezone_offset = doc["utc_offset_seconds"].as<int>();
-
   JsonObject current = doc["current"];
   JsonObject daily = doc["daily"];
   JsonObject hourly = doc["hourly"];
@@ -308,20 +283,14 @@ DeserializationError deserializeOpenMeteoCall(WiFiClient &json,
   r.current.feels_like = current["apparent_temperature"].as<float>();
   r.current.pressure = current["surface_pressure"].as<int>(); //
   r.current.humidity = current["relative_humidity_2m"].as<int>();
-  // r.current.dew_point  = current["dew_point"] .as<float>(); //
   r.current.clouds = current["cloud_cover"].as<int>();
   r.current.uvi = daily["uv_index_max"][0].as<float>();     //
-  r.current.visibility = hourly["visibility"][0].as<int>(); //
+  r.current.visibility = current["visibility"].as<int>(); //
   r.current.wind_speed = current["wind_speed_10m"].as<float>();
   r.current.wind_gust = current["wind_gusts_10m"].as<float>();
   r.current.wind_deg = current["wind_direction_10m"].as<int>(); // w
-  r.current.rain_1h = current["rain"].as<float>();
-  r.current.snow_1h = current["snow"].as<float>();
-  // JsonObject current_weather = current["weather"][0];
   r.current.weather.id = current["weather_code"].as<int>();
-  // r.current.weather.main        = current_weather["main"]       .as<const char *>();
-  // r.current.weather.description = current_weather["description"].as<const char *>();
-  // r.current.weather.icon        = current_weather["icon"]       .as<const char *>();
+  r.current.is_day = current["is_day"].as<bool>();
 
   // minutely forecast is currently unused
   // i = 0;
@@ -342,24 +311,14 @@ DeserializationError deserializeOpenMeteoCall(WiFiClient &json,
   {
     r.hourly[i].dt = hourly["time"][i].as<int64_t>(); // dt means
     r.hourly[i].temp = hourly["temperature_2m"][i].as<float>();
-    r.hourly[i].feels_like = hourly["apparent_temperature"][i].as<float>();
-    r.hourly[i].pressure = hourly["surface_pressure"][i].as<int>();
-    r.hourly[i].humidity = hourly["relative_humidity_2m"][i].as<int>();
-    r.hourly[i].dew_point = hourly["dew_point_2m"][i].as<float>();
     r.hourly[i].clouds = hourly["cloud_cover"][i].as<int>();
-    // r.hourly[i].uvi        = hourly["uvi"][i]       .as<float>();
-    r.hourly[i].visibility = hourly["visibility"][i].as<int>();
     r.hourly[i].wind_speed = hourly["wind_speed_10m"][i].as<float>();
-    r.hourly[i].wind_gust = hourly["wind_gust_10m"][i].as<float>();
-    r.hourly[i].wind_deg = hourly["wind_deg_10m"][i].as<int>();
-    r.hourly[i].pop = hourly["precipitation_probability"][i].as<float>();
+    r.hourly[i].wind_gust = hourly["wind_gusts_10m"][i].as<float>();
+    r.hourly[i].pop = hourly["precipitation_probability"][i].as<int>();
     r.hourly[i].rain_1h = hourly["rain"][i].as<float>();
     r.hourly[i].snow_1h = hourly["snowfall"][i].as<float>();
-    // JsonObject hourly_weather = hourly["weather"][0];
-    // r.hourly[i].weather.id          = hourly_weather["id"]         .as<int>();
-    // r.hourly[i].weather.main        = hourly_weather["main"]       .as<const char *>();
-    // r.hourly[i].weather.description = hourly_weather["description"].as<const char *>();
-    // r.hourly[i].weather.icon        = hourly_weather["icon"]       .as<const char *>();
+    r.hourly[i].weather.id = hourly["weather_code"][i].as<int>();
+    r.hourly[i].is_day = hourly["is_day"][i].as<bool>();
 
     if (i == OWM_NUM_HOURLY - 1)
     {
@@ -371,43 +330,20 @@ DeserializationError deserializeOpenMeteoCall(WiFiClient &json,
   for (size_t i = 0; i < days; i++)
   {
     r.daily[i].dt = daily["time"][i].as<int64_t>();
-    r.daily[i].sunrise = daily["sunrise"][i].as<int64_t>();
-    r.daily[i].sunset = daily["sunset"][i].as<int64_t>();
+    // TODO: Open-Meteo does not provide lunar data. Calculate them or use another API.
     // r.daily[i].moonrise   = daily["moonrise"]  .as<int64_t>();
     // r.daily[i].moonset    = daily["moonset"]   .as<int64_t>();
     // r.daily[i].moon_phase = daily["moon_phase"].as<float>();
-    // JsonObject daily_temp = daily["temp"];
-    // r.daily[i].temp.morn  = daily_temp["morn"] .as<float>();
-    // r.daily[i].temp.day   = daily_temp["day"]  .as<float>();
-    // r.daily[i].temp.eve   = daily_temp["eve"]  .as<float>();
-    // r.daily[i].temp.night = daily_temp["night"].as<float>();
     r.daily[i].temp.min = daily["temperature_2m_min"][i].as<float>();
     r.daily[i].temp.max = daily["temperature_2m_max"][i].as<float>();
-    Serial.println("daily temp min: " + String(r.daily[i].temp.min));
-    Serial.println("daily temp max: " + String(r.daily[i].temp.max));
-    // JsonObject daily_feels_like = daily["feels_like"];
-    // r.daily[i].feels_like.morn  = daily_feels_like["morn"] .as<float>();
-    // r.daily[i].feels_like.day   = daily_feels_like["day"]  .as<float>();
-    // r.daily[i].feels_like.eve   = daily_feels_like["eve"]  .as<float>();
-    // r.daily[i].feels_like.night = daily_feels_like["night"].as<float>();
-    r.daily[i].pressure = daily["pressure"].as<int>();
-    r.daily[i].humidity = daily["humidity"].as<int>();
-    r.daily[i].dew_point = daily["dew_point"].as<float>();
-    r.daily[i].clouds = daily["clouds"].as<int>();
-    r.daily[i].uvi = daily["uvi"].as<float>();
-    r.daily[i].visibility = daily["visibility"].as<int>();
-    r.daily[i].wind_speed = daily["wind_speed"].as<float>();
-    r.daily[i].wind_gust = daily["wind_gust"].as<float>();
-    r.daily[i].wind_deg = daily["wind_deg"].as<int>();
-    r.daily[i].pop = daily["pop"].as<float>();
-    r.daily[i].rain = daily["rain"].as<float>();
-    r.daily[i].snow = daily["snow"].as<float>();
-    // JsonObject daily_weather = daily["weather"][0];
+    // Cloud cover percentage is not provided by Open-Meteo as daily
+    // r.daily[i].clouds = daily["cloud_cover"][i].as<int>();
+    r.daily[i].wind_speed = daily["wind_speed_10m_max"][i].as<float>();
+    r.daily[i].wind_gust = daily["wind_gusts_10m_max"][i].as<float>();
+    r.daily[i].pop = daily["precipitation_probability_max"][i].as<int>();
+    r.daily[i].rain = daily["rain_sum"][i].as<float>();
+    r.daily[i].snow = daily["snowfall_sum"][i].as<float>();
     r.daily[i].weather.id = daily["weather_code"][i].as<int>();
-    Serial.println("daily weather id: " + String(r.daily[i].weather.id));
-    // r.daily[i].weather.main        = daily_weather["main"]       .as<const char *>();
-    // r.daily[i].weather.description = daily_weather["description"].as<const char *>();
-    // r.daily[i].weather.icon        = daily_weather["icon"]       .as<const char *>();
 
     if (i == OWM_NUM_DAILY - 1)
     {
@@ -415,6 +351,8 @@ DeserializationError deserializeOpenMeteoCall(WiFiClient &json,
     }
   }
 
+  // TODO: Open-Meteo does not issue alerts, use another API.
+  /*
 #if DISPLAY_ALERTS
   i = 0;
   for (JsonObject alerts : doc["alerts"].as<JsonArray>())
@@ -435,6 +373,7 @@ DeserializationError deserializeOpenMeteoCall(WiFiClient &json,
     ++i;
   }
 #endif
+  */
 
   return error;
 } // end deserializeOpenMeteoCall
